@@ -1,0 +1,7 @@
+role: inspector
+user: bob
+command: filter
+district: downtown
+symlink ok: ./active_reports-downtown
+invalid condition: severity:
+filter failed

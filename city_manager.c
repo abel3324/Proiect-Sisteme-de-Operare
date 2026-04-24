@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <time.h>
+#include <ctype.h>
 
 #define PATH_LEN 256
 
@@ -157,14 +158,18 @@ int createSymlinkForDistrict(const char *districtID) {
 
     return 0;
 }
-
 // creeaza structura district
 int createDistrict(const char* districtID, const char* userRole) {
 
     (void)userRole;
 
     char dir_path[PATH_LEN];
-    snprintf(dir_path, sizeof(dir_path), "./%s", districtID);
+
+    // construim path-ul directorului
+    if (snprintf(dir_path, sizeof(dir_path), "./%s", districtID) >= PATH_LEN) {
+        printf("path too long\n");
+        return -1;
+    }
 
     struct stat st;
 
@@ -176,23 +181,36 @@ int createDistrict(const char* districtID, const char* userRole) {
         }
     }
 
-    chmod(dir_path, 0750);
+    // setam permisiuni
+    if (chmod(dir_path, 0750) == -1) {
+        perror("chmod directory");
+        return -1;
+    }
 
     // reports.dat
     char report_path[PATH_LEN];
-    snprintf(report_path, sizeof(report_path), "%s/reports.dat", dir_path);
+    if (snprintf(report_path, sizeof(report_path), "%s/reports.dat", dir_path) >= PATH_LEN) {
+        printf("path too long\n");
+        return -1;
+    }
     if (createFileIfNotExists(report_path, 0664) == -1) return -1;
 
     // district.cfg
     char cfg_path[PATH_LEN];
-    snprintf(cfg_path, sizeof(cfg_path), "%s/district.cfg", dir_path);
+    if (snprintf(cfg_path, sizeof(cfg_path), "%s/district.cfg", dir_path) >= PATH_LEN) {
+        printf("path too long\n");
+        return -1;
+    }
     if (createFileIfNotExists(cfg_path, 0640) == -1) return -1;
 
     if (initDistrictConfig(cfg_path) == -1) return -1;
 
     // log
     char log_path[PATH_LEN];
-    snprintf(log_path, sizeof(log_path), "%s/logged_district", dir_path);
+    if (snprintf(log_path, sizeof(log_path), "%s/logged_district", dir_path) >= PATH_LEN) {
+        printf("path too long\n");
+        return -1;
+    }
     if (createFileIfNotExists(log_path, 0644) == -1) return -1;
 
     // symlink
@@ -331,6 +349,13 @@ int addReport(const char *districtID, const char *user, int role) {
         return -1;
     }
 
+    // verificam ca severity este 1, 2 sau 3
+    if (r.severity < 1 || r.severity > 3) {
+        printf("invalid severity, must be 1, 2 or 3\n");
+        close(fd);
+        return -1;
+    }
+
     getchar(); // consuma '\n'
 
     printf("description: ");
@@ -402,7 +427,7 @@ void printReport(Report r) {
     printf("Description: %s\n", r.description);
     printf("-----------------------------\n");
 }
-int listReports(const char *districtID, int role) {
+int listReports(const char *districtID, int role,const char *user) {
     char report_path[PATH_LEN];
 
     // construim path-ul catre reports.dat
@@ -465,10 +490,381 @@ int listReports(const char *districtID, int role) {
 
     // daca nu exista rapoarte
     if (!found) {
-        printf("No reports found.\n");
+        printf("no reports found.\n");
+    }
+
+    if (role == 1) logAction(districtID, "inspector", user, "list");
+    if (role == 2) logAction(districtID, "manager", user, "list");
+
+    return 0;
+}
+int viewReport(const char *districtID,int role ,const char *user, int reportID){
+    //construim path-ul catre reports.dat
+    char report_path[PATH_LEN];
+
+    if(snprintf(report_path,sizeof(report_path),"./%s/reports.dat",districtID)>=PATH_LEN){
+        printf("path too long.\n");
+        return -1;
+    }
+     // verificam daca rolul are voie sa citeasca
+    if (canReadReports(report_path, role) == 0) {
+        printf("permission denied for view on reports.dat\n");
+        return -1;
+    }
+    // deschidem fisierul pentru citire
+    int fd = open(report_path, O_RDONLY);
+    if (fd == -1) {
+        perror("open reports.dat");
+        return -1;
+    }
+
+    Report r;
+    int found = 0;
+
+    //cautam report-ul
+    while(read(fd,&r,sizeof(Report))==sizeof(Report)){
+        if(r.report_id == reportID){
+            printReport(r);
+            found = 1;
+            break;
+        }
+    }
+
+    close(fd);
+
+    //daca nu l-am gasit 
+    if(!found){
+        printf("Report with id %d not found\n",reportID);
+        return -1;
+    }
+    if (role == 1) logAction(districtID, "inspector", user, "view");
+    if (role == 2) logAction(districtID, "manager", user, "view");
+
+    return 0;
+}
+
+char* getExtraArg(char *argv[], int argc) {
+    if (argc < 8) return NULL;
+    return argv[7];
+}
+
+int removeReport(const char *districtID, int role, const char *user ,int reportID) {
+    if (role != 2) {
+        printf("permission denied: only manager can remove reports\n");
+        return -1;
+    }
+
+    char report_path[PATH_LEN];
+
+    // construim path-ul catre reports.dat
+    if (snprintf(report_path, sizeof(report_path), "./%s/reports.dat", districtID) >= PATH_LEN) {
+        printf("path too long\n");
+        return -1;
+    }
+
+    // verificam daca managerul are write pe reports.dat
+    struct stat st;
+    if (stat(report_path, &st) == -1) {
+        perror("stat reports.dat");
+        return -1;
+    }
+
+    if (!(st.st_mode & S_IWUSR)) {
+        printf("permission denied: manager has no write permission\n");
+        return -1;
+    }
+
+    int fd = open(report_path, O_RDWR);
+    if (fd == -1) {
+        perror("open reports.dat");
+        return -1;
+    }
+
+    Report r;
+    off_t pos = 0;
+    int found = 0;
+
+    // cautam raportul dupa id
+    while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+        if (r.report_id == reportID) {
+            found = 1;
+            break;
+        }
+        pos += sizeof(Report);
+    }
+
+    if (!found) {
+        printf("report with id %d not found\n", reportID);
+        close(fd);
+        return -1;
+    }
+
+    // pozitia de unde citim urmatorul raport
+    off_t read_pos = pos + sizeof(Report);
+
+    // pozitia unde scriem raportul citit
+    off_t write_pos = pos;
+
+    // mutam toate rapoartele de dupa cel sters cu o pozitie in fata
+    while (1) {
+        if (lseek(fd, read_pos, SEEK_SET) == -1) {
+            perror("lseek read_pos");
+            close(fd);
+            return -1;
+        }
+
+        ssize_t bytes = read(fd, &r, sizeof(Report));
+
+        if (bytes == 0) {
+            break; // am ajuns la final
+        }
+
+        if (bytes != sizeof(Report)) {
+            printf("corrupted reports.dat\n");
+            close(fd);
+            return -1;
+        }
+
+        if (lseek(fd, write_pos, SEEK_SET) == -1) {
+            perror("lseek write_pos");
+            close(fd);
+            return -1;
+        }
+
+        if (write(fd, &r, sizeof(Report)) != sizeof(Report)) {
+            perror("write shifted report");
+            close(fd);
+            return -1;
+        }
+
+        read_pos += sizeof(Report);
+        write_pos += sizeof(Report);
+    }
+
+    // taiem fisierul cu dimensiunea unui raport
+    if (ftruncate(fd, write_pos) == -1) {
+        perror("ftruncate");
+        close(fd);
+        return -1;
+    }
+
+    close(fd);
+
+    logAction(districtID, "manager", user, "remove_report");
+
+    printf("report with id %d removed successfully\n", reportID);
+    return 0;
+}
+int updateThreshold(const char *districtID, int role, const char *user, const char *value) {
+
+    if (role != 2) {
+        printf("permission denied: only manager can update threshold\n");
+        return -1;
+    }
+
+    char cfg_path[PATH_LEN];
+
+    if (snprintf(cfg_path, sizeof(cfg_path), "./%s/district.cfg", districtID) >= PATH_LEN) {
+        printf("path too long\n");
+        return -1;
+    }
+
+    struct stat st;
+    if (stat(cfg_path, &st) == -1) {
+        perror("stat district.cfg");
+        return -1;
+    }
+
+    // verificam ca permisiunile sunt EXACT 640
+    if ((st.st_mode & 0777) != 0640) {
+        printf("wrong permissions on district.cfg (expected 640)\n");
+        return -1;
+    }
+
+    int fd = open(cfg_path, O_WRONLY | O_TRUNC);
+    if (fd == -1) {
+        perror("open district.cfg");
+        return -1;
+    }
+
+    char buffer[50];
+    int len = snprintf(buffer, sizeof(buffer), "threshold=%s\n", value);
+
+    if (write(fd, buffer, len) != len) {
+        perror("write threshold");
+        close(fd);
+        return -1;
+    }
+
+    close(fd);
+
+    printf("threshold updated to %s\n", value);
+
+    logAction(districtID, "manager", user, "update_threshold");
+
+
+    return 0;
+}
+
+int parse_condition(const char *input, char *field, char *op, char *value) {
+    const char *first_colon = strchr(input, ':');
+    if (first_colon == NULL) return 0;
+
+    const char *second_colon = strchr(first_colon + 1, ':');
+    if (second_colon == NULL) return 0;
+
+    int field_len = first_colon - input;
+    int op_len = second_colon - first_colon - 1;
+
+    // verificam dimensiunile pentru a evita overflow
+    if (field_len <= 0 || field_len >= 50) return 0;
+    if (op_len <= 0 || op_len >= 4) return 0;
+    if (strlen(second_colon + 1) >= 100) return 0;
+
+    strncpy(field, input, field_len);
+    field[field_len] = '\0';
+
+    strncpy(op, first_colon + 1, op_len);
+    op[op_len] = '\0';
+
+    strcpy(value, second_colon + 1);
+
+    return 1;
+}
+
+int compare_int(long a, const char *op, long b) {
+    if (strcmp(op, "==") == 0) return a == b;
+    if (strcmp(op, "!=") == 0) return a != b;
+    if (strcmp(op, "<") == 0) return a < b;
+    if (strcmp(op, "<=") == 0) return a <= b;
+    if (strcmp(op, ">") == 0) return a > b;
+    if (strcmp(op, ">=") == 0) return a >= b;
+
+    return 0;
+}
+
+int compare_string(const char *a, const char *op, const char *b) {
+    int cmp = strcmp(a, b);
+
+    if (strcmp(op, "==") == 0) return cmp == 0;
+    if (strcmp(op, "!=") == 0) return cmp != 0;
+    if (strcmp(op, "<") == 0) return cmp < 0;
+    if (strcmp(op, "<=") == 0) return cmp <= 0;
+    if (strcmp(op, ">") == 0) return cmp > 0;
+    if (strcmp(op, ">=") == 0) return cmp >= 0;
+
+    return 0;
+}
+
+int match_condition(Report *r, const char *field, const char *op, const char *value) {
+    if (strcmp(field, "severity") == 0) {
+        long v = atol(value);
+        return compare_int(r->severity, op, v);
+    }
+
+    if (strcmp(field, "timestamp") == 0) {
+        long v = atol(value);
+        return compare_int((long)r->timestamp, op, v);
+    }
+
+    if (strcmp(field, "category") == 0) {
+        return compare_string(r->category, op, value);
+    }
+
+    if (strcmp(field, "inspector") == 0) {
+        return compare_string(r->inspector_name, op, value);
     }
 
     return 0;
+}
+int filterReports(const char *districtID, int role, const char *user,int argc, char *argv[], int startIndex) {
+    char report_path[PATH_LEN];
+
+    if (snprintf(report_path, sizeof(report_path), "./%s/reports.dat", districtID) >= PATH_LEN) {
+        printf("path too long\n");
+        return -1;
+    }
+
+    if (canReadReports(report_path, role) == 0) {
+        printf("permission denied for filter on reports.dat\n");
+        return -1;
+    }
+
+    int fd = open(report_path, O_RDONLY);
+    if (fd == -1) {
+        perror("open reports.dat");
+        return -1;
+    }
+
+    Report r;
+    int found = 0;
+
+    while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+        int ok = 1;
+
+        for (int i = startIndex; i < argc; i++) {
+            char field[50];
+            char op[4];
+            char value[100];
+
+            if (parse_condition(argv[i], field, op, value) == 0) {
+                printf("invalid condition: %s\n", argv[i]);
+                close(fd);
+                return -1;
+            }
+
+            if (match_condition(&r, field, op, value) == 0) {
+                ok = 0;
+                break;
+            }
+        }
+
+        if (ok) {
+            printReport(r);
+            found = 1;
+        }
+    }
+
+    close(fd);
+
+    if (!found) {
+        printf("No matching reports found.\n");
+    }
+    if (role == 1) logAction(districtID, "inspector", user, "filter");
+    if (role == 2) logAction(districtID, "manager", user, "filter");
+
+    return 0;
+}
+
+// verificam daca symlink-ul este valid sau dangling
+void checkSymlink(const char *districtID) {
+    char link_path[PATH_LEN];
+
+    // construim path-ul linkului
+    if (snprintf(link_path, sizeof(link_path), "./active_reports-%s", districtID) >= PATH_LEN) {
+        printf("path too long\n");
+        return;
+    }
+
+    struct stat st;
+
+    // folosim lstat pentru a verifica symlink-ul
+    if (lstat(link_path, &st) == -1) {
+        perror("lstat");
+        return;
+    }
+
+    // verificam daca este symlink
+    if (S_ISLNK(st.st_mode)) {
+        struct stat target_st;
+
+        // verificam daca target-ul exista
+        if (stat(link_path, &target_st) == -1) {
+            printf("warning: dangling symlink %s\n", link_path);
+        } else {
+            printf("symlink ok: %s\n", link_path);
+        }
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -477,6 +873,7 @@ int main(int argc, char *argv[]) {
     char *user = getUser(argv, argc);
     int command = commandSelect(argv, argc);
     char *district = getDistrict(argv, argc);
+    char *extraArg = getExtraArg(argv, argc);
 
     if (role == -1) {
         printf("invalid role\n");
@@ -503,15 +900,14 @@ int main(int argc, char *argv[]) {
     printf("command: "); printCommand(command);
     printf("district: %s\n", district);
 
-    if (createDistrict(district, argv[2]) == -1) {
-    printf("error creating district\n");
-    return 1;
-    }
 
     if (createDistrict(district, argv[2]) == -1) {
         printf("error creating district\n");
         return 1;
     }
+
+    // verificam symlink-ul
+    checkSymlink(district);
 
     if (command == 1) {
         if (addReport(district, user, role) == -1) {
@@ -519,12 +915,54 @@ int main(int argc, char *argv[]) {
             return 1;
         }
     } else if (command == 2) {
-        if (listReports(district, role) == -1) {
+        if (listReports(district, role ,user) == -1) {
             printf("list failed\n");
             return 1;
         }
-    } else {
-        printf("command not implemented yet\n");
+    } else if (command == 3){
+        if (extraArg == NULL){
+            printf("missing reports id \n");
+            return 1;
+        }
+        int reportID = atoi(extraArg);
+
+        if (viewReport(district,role,user,reportID) == -1){
+            printf("view failed\n");
+            return 1;
+        }
+    } else if (command == 4){
+        if (extraArg == NULL) {
+            printf("missing report id\n");
+            return 1;
+        }
+
+        int reportID = atoi(extraArg);
+
+        if (removeReport(district, role, user, reportID) == -1) {
+            printf("remove_report failed\n");
+            return 1;
+        
+        }
+    } else if(command == 5) {
+        if (extraArg == NULL) {
+            printf("missing threshold value\n");
+            return 1;
+        }   
+
+        if (updateThreshold(district, role, user ,extraArg) == -1) {
+            printf("update_threshold failed\n");
+            return 1;
+        }
+    } else if (command == 6) {
+        if (argc < 8) {
+            printf("missing filter condition\n");
+            return 1;
+        }
+
+        if (filterReports(district, role, user, argc, argv, 7) == -1) {
+            printf("filter failed\n");
+            return 1;
+        }
     }
 
 return 0;
