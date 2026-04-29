@@ -62,6 +62,7 @@ char* getUser(char *argv[], int argc) {
     4 remove_report
     5 update_threshold
     6 filter
+    7 remove_district
 */
 
 int commandSelect(char *argv[], int argc) {
@@ -73,6 +74,7 @@ int commandSelect(char *argv[], int argc) {
     if (strcmp(argv[5], "--remove_report") == 0) return 4;
     if (strcmp(argv[5], "--update_threshold") == 0) return 5;
     if (strcmp(argv[5], "--filter") == 0) return 6;
+    if(strcmp(argv[5], "--remove_district") == 0)return 7;
 
     return -1;
 }
@@ -85,6 +87,7 @@ void printCommand(int n) {
         case 4: printf("remove_report\n"); break;
         case 5: printf("update_threshold\n"); break;
         case 6: printf("filter\n"); break;
+        case 7: printf("remove_district\n")break;
         default: printf("invalid command\n"); break;
     }
 }
@@ -863,6 +866,27 @@ void checkSymlink(const char *districtID) {
             printf("warning: dangling symlink %s\n", link_path);
         } else {
             printf("symlink ok: %s\n", link_path);
+        }
+    }
+}
+
+
+//phase 2
+
+void remove_district(const char* districtID, char *userRole){
+    char filepath[PATH_LEN];
+    if (userRole != "manager"){
+        printf("permission denied, you must be a manager ! \n");
+        exit(-1);
+    }else{
+        int s = fork();
+        if (s == 0){
+            snprintf(filepath, sizeof(filepath), "active-reports-%s", districtID);
+            unlink(filepath);
+            execlp("rm", "rm", "-rf",districtID, NULL)
+        }else if (s == -1){
+            prinf("error at removing district\n");
+            exit(-1);
         }
     }
 }
