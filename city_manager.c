@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include <time.h>
 #include <ctype.h>
+#include <sys/wait.h>
 
 #define PATH_LEN 256
 
@@ -87,7 +88,7 @@ void printCommand(int n) {
         case 4: printf("remove_report\n"); break;
         case 5: printf("update_threshold\n"); break;
         case 6: printf("filter\n"); break;
-        case 7: printf("remove_district\n")break;
+        case 7: printf("remove_district\n"); break;
         default: printf("invalid command\n"); break;
     }
 }
@@ -874,25 +875,58 @@ void checkSymlink(const char *districtID) {
 //phase 2
 
 void remove_district(const char* districtID, char *userRole){
-    char filepath[PATH_LEN];
-    if (userRole != "manager"){
-        printf("permission denied, you must be a manager ! \n");
-        exit(-1);
-    }else{
-        int s = fork();
-        if (s == 0){
-            snprintf(filepath, sizeof(filepath), "active-reports-%s", districtID);
-            unlink(filepath);
-            execlp("rm", "rm", "-rf",districtID, NULL)
-        }else if (s == -1){
-            prinf("error at removing district\n");
-            exit(-1);
-        }
+   char district_path[PATH_LEN];
+   char symlink_path[PATH_LEN];
+
+   if (strcmp(userRole, "manager") != 0) {//verificam permisiunea
+        fprintf(stderr, "remove_district: permission denied (manager only)\n");
+        return;
     }
+
+    // construim calea directorului și numele symlinkului 
+    snprintf(district_path, sizeof(district_path), "%s", districtID);
+    snprintf(symlink_path, sizeof(symlink_path), "active_reports-%s", districtID);
+
+    pid_t pid = fork();//proces copil
+
+    if (pid < 0) {//eroare la fork
+        perror("fork");
+        return;
+    }
+
+    if(pid == 0){
+        //suntem in copil => facem rm
+        execlp("rm", "rm", "-rf", district_path, NULL);
+        
+        //aici ajungem doar daca execlp a esuat
+        perror("execlp");
+        _exit(1);
+    }
+    //procesul parinte 
+    int status;
+
+    //asteptam sa fie gata procesul copil
+    if(waitpid(pid,&status,0) == -1){
+        perror("waitpid");
+        return;
+    }
+
+    if(WIFEXITED(status) && WEXITSTATUS(status) == 0){//procesul copil s a terminat normal + codul de terminare  
+        
+        if (unlink(symlink_path) == -1) {
+            perror("unlink");
+        }
+
+        printf("district '%s' removed successfully\n", districtID);
+    }else{
+        fprintf(stderr, "remove_district: failed to remove district '%s'\n", districtID);
+    }
+
+
 }
 
-int main(int argc, char *argv[]) {
-
+int main(int argc, char *argv[])
+{
     int role = getRole(argv, argc);
     char *user = getUser(argv, argc);
     int command = commandSelect(argv, argc);
@@ -919,42 +953,42 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    printf("role: "); printRole(role);
+    printf("role: ");
+    printRole(role);
+
     printf("user: %s\n", user);
-    printf("command: "); printCommand(command);
+
+    printf("command: ");
+    printCommand(command);
+
     printf("district: %s\n", district);
 
-
-    if (createDistrict(district, argv[2]) == -1) {
-        printf("error creating district\n");
-        return 1;
-    }
-
-    // verificam symlink-ul
-    checkSymlink(district);
-
     if (command == 1) {
+
+        // la add, dacă districtul nu există, îl creăm 
+        if (createDistrict(district, argv[2]) == -1) {
+            printf("error creating district\n");
+            return 1;
+        }
+
+        checkSymlink(district);
+
         if (addReport(district, user, role) == -1) {
             printf("add failed\n");
             return 1;
         }
+
     } else if (command == 2) {
-        if (listReports(district, role ,user) == -1) {
+
+        checkSymlink(district);
+
+        if (listReports(district, role, user) == -1) {
             printf("list failed\n");
             return 1;
         }
-    } else if (command == 3){
-        if (extraArg == NULL){
-            printf("missing reports id \n");
-            return 1;
-        }
-        int reportID = atoi(extraArg);
 
-        if (viewReport(district,role,user,reportID) == -1){
-            printf("view failed\n");
-            return 1;
-        }
-    } else if (command == 4){
+    } else if (command == 3) {
+
         if (extraArg == NULL) {
             printf("missing report id\n");
             return 1;
@@ -962,33 +996,65 @@ int main(int argc, char *argv[]) {
 
         int reportID = atoi(extraArg);
 
+        checkSymlink(district);
+
+        if (viewReport(district, role, user, reportID) == -1) {
+            printf("view failed\n");
+            return 1;
+        }
+
+    } else if (command == 4) {
+
+        if (extraArg == NULL) {
+            printf("missing report id\n");
+            return 1;
+        }
+
+        int reportID = atoi(extraArg);
+
+        checkSymlink(district);
+
         if (removeReport(district, role, user, reportID) == -1) {
             printf("remove_report failed\n");
             return 1;
-        
         }
-    } else if(command == 5) {
+
+    } else if (command == 5) {
+
         if (extraArg == NULL) {
             printf("missing threshold value\n");
             return 1;
-        }   
+        }
 
-        if (updateThreshold(district, role, user ,extraArg) == -1) {
+        checkSymlink(district);
+
+        if (updateThreshold(district, role, user, extraArg) == -1) {
             printf("update_threshold failed\n");
             return 1;
         }
+
     } else if (command == 6) {
+
         if (argc < 8) {
             printf("missing filter condition\n");
             return 1;
         }
 
+        checkSymlink(district);
+
         if (filterReports(district, role, user, argc, argv, 7) == -1) {
             printf("filter failed\n");
             return 1;
         }
+
+    } else if (command == 7) {
+
+        remove_district(district, argv[2]);
+
+    } else {
+        printf("invalid command\n");
+        return 1;
     }
 
-return 0;
-
+    return 0;
 }
