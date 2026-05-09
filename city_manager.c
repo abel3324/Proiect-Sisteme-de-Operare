@@ -9,12 +9,15 @@
 #include <time.h>
 #include <ctype.h>
 #include <sys/wait.h>
+#include <signal.h>
 
 #define PATH_LEN 256
 
 #define NAME_LEN 50
 #define CATEGORY_LEN 30
 #define DESC_LEN 100
+
+#define PID_FILE ".monitor_pid"
 
 typedef struct {
     int report_id;
@@ -298,87 +301,167 @@ int logAction(const char *districtID, const char *roleText, const char *user, co
     close(fd);
     return 0;
 }
+// notifica monitorul prin SIGUSR1 si logheaza rezultatul in logged_district
+void notify_monitor(const char *districtID, const char *roleText, const char *user, int report_id) {
+    char log_path[PATH_LEN];
+    snprintf(log_path, sizeof(log_path), "./%s/logged_district", districtID);
+ 
+    int log_fd = open(log_path, O_WRONLY | O_APPEND);
+    if (log_fd == -1) {
+        perror("open log for monitor notification");
+        return;
+    }
+ 
+    time_t now = time(NULL);
+    char line[512];
+    int len;
+ 
+    // incercam sa deschidem fisierul .monitor_pid
+    int pid_fd = open(PID_FILE, O_RDONLY);
+    if (pid_fd == -1) {
+        len = snprintf(line, sizeof(line),
+            "%ld %s %s monitor_notify FAILED: monitor could not be informed "
+            "(could not open %s: %s) for report %d\n",
+            now, roleText, user, PID_FILE, strerror(errno), report_id);
+        write(log_fd, line, len);
+        close(log_fd);
+        return;
+    }
+ 
+    // citim PID-ul din fisier
+    char buf[32];
+    ssize_t n = read(pid_fd, buf, sizeof(buf) - 1);
+    close(pid_fd);
+ 
+    if (n <= 0) {
+        len = snprintf(line, sizeof(line),
+            "%ld %s %s monitor_notify FAILED: monitor could not be informed "
+            "(could not read PID from %s) for report %d\n",
+            now, roleText, user, PID_FILE, report_id);
+        write(log_fd, line, len);
+        close(log_fd);
+        return;
+    }
+    buf[n] = '\0';
+ 
+    pid_t monitor_pid = (pid_t)atoi(buf);
+    if (monitor_pid <= 0) {
+        len = snprintf(line, sizeof(line),
+            "%ld %s %s monitor_notify FAILED: monitor could not be informed "
+            "(invalid PID '%s' in %s) for report %d\n",
+            now, roleText, user, buf, PID_FILE, report_id);
+        write(log_fd, line, len);
+        close(log_fd);
+        return;
+    }
+ 
+    // trimitem SIGUSR1 monitorului
+    if (kill(monitor_pid, SIGUSR1) == -1) {
+        len = snprintf(line, sizeof(line),
+            "%ld %s %s monitor_notify FAILED: monitor could not be informed "
+            "(kill(%d, SIGUSR1) failed: %s) for report %d\n",
+            now, roleText, user, monitor_pid, strerror(errno), report_id);
+        write(log_fd, line, len);
+        close(log_fd);
+        return;
+    }
+ 
+    // succes
+    len = snprintf(line, sizeof(line),
+        "%ld %s %s monitor_notify OK: monitor notified successfully "
+        "(SIGUSR1 sent to pid %d) for report %d\n",
+        now, roleText, user, monitor_pid, report_id);
+    write(log_fd, line, len);
+    close(log_fd);
+}
+
 
 // adauga un raport nou
 int addReport(const char *districtID, const char *user, int role) {
     char report_path[PATH_LEN];
     snprintf(report_path, sizeof(report_path), "./%s/reports.dat", districtID);
-
+ 
     if (canAddToReports(report_path, role) == 0) {
         printf("permission denied for add on reports.dat\n");
         return -1;
     }
-
+ 
     int fd = open(report_path, O_WRONLY | O_APPEND);
     if (fd == -1) {
         perror("open reports.dat");
         return -1;
     }
-
+ 
     Report r;
     memset(&r, 0, sizeof(Report));
-
+ 
     r.report_id = getNextReportID(report_path);
     if (r.report_id == -1) {
         close(fd);
         return -1;
     }
-
+ 
     strncpy(r.inspector_name, user, NAME_LEN - 1);
     r.timestamp = time(NULL);
-
+ 
     printf("latitude: ");
     if (scanf("%lf", &r.latitude) != 1) {
         printf("invalid latitude\n");
         close(fd);
         return -1;
     }
-
+ 
     printf("longitude: ");
     if (scanf("%lf", &r.longitude) != 1) {
         printf("invalid longitude\n");
         close(fd);
         return -1;
     }
-
+ 
     getchar(); // consuma '\n' ramas dupa scanf
-
+ 
     printf("category: ");
     readLine(r.category, CATEGORY_LEN);
-
+ 
     printf("severity (1/2/3): ");
     if (scanf("%d", &r.severity) != 1) {
         printf("invalid severity\n");
         close(fd);
         return -1;
     }
-
+ 
     // verificam ca severity este 1, 2 sau 3
     if (r.severity < 1 || r.severity > 3) {
         printf("invalid severity, must be 1, 2 or 3\n");
         close(fd);
         return -1;
     }
-
+ 
     getchar(); // consuma '\n'
-
+ 
     printf("description: ");
     readLine(r.description, DESC_LEN);
-
+ 
     if (write(fd, &r, sizeof(Report)) != sizeof(Report)) {
         perror("write report");
         close(fd);
         return -1;
     }
-
+ 
     close(fd);
-
+ 
+    const char *roleText = (role == 1) ? "inspector" : "manager";
+ 
     if (role == 1) logAction(districtID, "inspector", user, "add");
     if (role == 2) logAction(districtID, "manager", user, "add");
-
+ 
+    // notificam monitorul si logam rezultatul
+    notify_monitor(districtID, roleText, user, r.report_id);
+ 
     printf("report added successfully with id %d\n", r.report_id);
     return 0;
 }
+
 
 //conversie permisiuni
 void permissionsToString(mode_t mode, char *perm) {
