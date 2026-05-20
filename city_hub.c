@@ -142,6 +142,75 @@ void calculate_scores(int count, char *districts[]){
     }
 }
 
-int main(){
+int main()
+{
+    char line[MAX_LINE];
+
+    while (1) {
+
+        printf("city_hub> ");
+
+        fflush(stdout);
+
+        // citim comanda
+        if (fgets(line,
+                  sizeof(line),
+                  stdin) == NULL) {
+
+            break;
+        }
+
+        // scoatem \n
+        line[strcspn(line, "\n")] = '\0';
+
+
+        // exit
+        if (strcmp(line, "exit") == 0) {
+
+            break;
+        }
+
+
+        // start_monitor
+        if (strcmp(line, "start_monitor") == 0) {
+
+            start_monitor();
+
+            continue;
+        }
+
+
+        // calculate_scores
+        if (strncmp(line,
+                    "calculate_scores",
+                    16) == 0) {
+
+            char *districts[MAX_ARGS];
+
+            int count = 0;
+
+            // spargem linia in cuvinte
+            char *token = strtok(line, " ");
+
+            // sarim peste calculate_scores
+            token = strtok(NULL, " ");
+
+            // luam toate districtele
+            while (token != NULL) {
+
+                districts[count++] = token;
+
+                token = strtok(NULL, " ");
+            }
+
+            calculate_scores(count, districts);
+
+            continue;
+        }
+
+
+        printf("unknown command\n");
+    }
+
     return 0;
 }
