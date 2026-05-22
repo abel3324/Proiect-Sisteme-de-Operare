@@ -15,12 +15,9 @@
 volatile sig_atomic_t running = 1;
 
 void handle_sigint(int sig){
-
     (void)sig;
-    write(STDOUT_FILENO, "monitor: shutting down\n", 23);
-
+    write(STDOUT_FILENO, "EXIT: monitor shutting down\n", 28); 
     unlink(PID_FILE);
-
     running = 0;
 }
 
@@ -69,6 +66,7 @@ int main(void){
     close(fd);
 
     printf("monitor started (pid %d)\n",getpid());
+    fflush(stdout);  
 
     //programul ramane pornit pana cand running devine 0
     while (running){

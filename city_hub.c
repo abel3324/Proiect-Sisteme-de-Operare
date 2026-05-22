@@ -14,71 +14,50 @@
 // functia porneste monitorul
 // si citeste mesajele lui prin pipe
 
-void start_monitor(){
-    // fd[0] = capat de citire
-    // fd[1] = capat de scriere
-    int fd[2];
+void start_monitor(void) {
 
-    // cream pipe-ul
-    if (pipe(fd) == -1) {
-        perror("pipe");
-        return;
-    }
+    pid_t hub_mon_pid = fork(); // cream hub_mon
 
-    //cream procesul copil
+    if (hub_mon_pid == 0) {
+        // suntem in hub_mon 
 
-    pid_t pid = fork();
-    if(pid < 0){
-        perror("fork");
-        return;
-    }
+        int pipe_mon[2];
+        pipe(pipe_mon);
 
-    //copilul
-    if(pid == 0){
+        pid_t mon_pid = fork(); // cream monitor_reports
 
-        //copilul nu citeste din pipe
-        close(fd[0]);
-
-        // redirectam stdout spre pipe
-        // orice printf merge acum in pipe
-        dup2(fd[1], STDOUT_FILENO);
-
-        // inchidem descriptorul vechi
-        close(fd[1]);
-
-        //inlocuim procesul copil cu monitor_reports
-        execl("./monitor_reports","monitor_reports", NULL);
-
-        perror("execl");
-        exit(1);
-    }
-
-    //parintele nu scrie in pipe
-    close(fd[1]);
-
-    char buffer[256];
-    int n;
-
-    //citim mesajele venite de la monitor
-    while ((n = read(fd[0],buffer,sizeof(buffer) - 1)) > 0){
-
-        buffer[n] = '\0';
-        
-        printf("[MONITOR] : %s", buffer);
-
-        // daca monitorul s-a inchis
-        if (strstr(buffer, "EXIT:")) {
-
-            printf("hub: monitor ended\n");
-
-            break;
+        if (mon_pid == 0) {
+            // suntem in monitor_reports 
+            close(pipe_mon[0]);
+            dup2(pipe_mon[1], STDOUT_FILENO);
+            close(pipe_mon[1]);
+            execl("./monitor_reports", "monitor_reports", NULL);
+            exit(1);
         }
-        close(fd[0]);
 
-        //asteptam terminarea copilului
-        waitpid(pid, NULL, 0);
+        // inapoi in hub_mon 
+        close(pipe_mon[1]);
+
+        char buffer[256]; int n;
+        while ((n = read(pipe_mon[0], buffer, sizeof(buffer)-1)) > 0) {
+            buffer[n] = '\0';
+            printf("[MONITOR]: %s", buffer);
+            fflush(stdout);
+            if (strstr(buffer, "EXIT:")) {
+                printf("hub: monitor ended\n");
+                fflush(stdout);
+                break;
+            }
+        }
+
+        close(pipe_mon[0]);
+        waitpid(mon_pid, NULL, 0);
+        exit(0);
     }
-    
+
+    // inapoi in city_hub 
+    // hub_mon ruleaza in fundal
+    printf("hub_mon pornit (pid %d)\n", hub_mon_pid);
 }
 
 // functia porneste scorer pentru fiecare district
