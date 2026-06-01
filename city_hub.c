@@ -14,7 +14,7 @@
 // functia porneste monitorul
 // si citeste mesajele lui prin pipe
 
-void start_monitor(void) {
+void start_monitor() {
 
     pid_t hub_mon_pid = fork(); // cream hub_mon
 
@@ -22,9 +22,17 @@ void start_monitor(void) {
         // suntem in hub_mon 
 
         int pipe_mon[2];
-        pipe(pipe_mon);
+        if (pipe(pipe_mon) == -1) {
+            perror("pipe");
+            exit(1);
+        }
 
         pid_t mon_pid = fork(); // cream monitor_reports
+
+        if (mon_pid < 0) {
+            perror("fork monitor");
+            exit(1);
+        }
 
         if (mon_pid == 0) {
             // suntem in monitor_reports 
@@ -32,6 +40,7 @@ void start_monitor(void) {
             dup2(pipe_mon[1], STDOUT_FILENO);
             close(pipe_mon[1]);
             execl("./monitor_reports", "monitor_reports", NULL);
+            perror("execl monitor_reports");  // ← aceasta linie lipsea
             exit(1);
         }
 
